@@ -3,7 +3,7 @@ testing_mode
 
 Testing Mode (Drupal Module)
 
-This module switches the database for the simpletest framework can use which won't alter anything on the existing database 
+This module changes database for testing and puts the Drupal in the testing mode. 
 
 To run this effeciently , 
 
