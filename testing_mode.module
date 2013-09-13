@@ -1,0 +1,169 @@
+<?php  
+
+define("SETTINGS_FILE", DRUPAL_ROOT."/sites/default/default.settings.php");
+define("SETTINGS_BACKUP_FILE", DRUPAL_ROOT."/sites/default/settings.testing_mode.bak");
+
+function testing_mode_menu() { 
+	
+	return array (
+		'admin/config/development/testing_mode' => array(
+			'title' => t('Testing Mode'),
+			'description' => t('Enables Testing Mode by switching the database in the settings.php. Hackish though.'),
+			'page callback' => 'drupal_get_form',
+			'page arguments' => array('testing_mode_admin_form'),
+			'access arguments' =>  array('administer users'),
+			'type' => MENU_NORMAL_ITEM,
+		),
+	);
+}
+
+
+function testing_mode_admin_form() { 
+	$form = array(); 
+	
+	$form['tm_new_database'] = array(
+		'#title' => t("New Database"),
+		'#description' => t("New database hostname for testing mode."),
+		'#type'=> 'textfield',
+		'#default_value' => variable_get('tm_new_database'),
+	);
+
+	$form['submit'] = array(
+		'#type'=> 'submit',
+		'#value' => variable_get('tm_testing_mode') ? t("Stop Testing Mode") : ("Start Testing Mode"),
+	);
+	
+	$form['#validate'][] = 'testing_mode_admin_form_validate';
+	$form['#submit'][] = 'testing_mode_admin_form_submit'; 
+	return $form;
+	 
+}
+
+/**
+ * Validate callback for the form 
+ */
+function testing_mode_admin_form_validate(&$form, &$form_state) { 
+	$current_database = 'miconnect';
+	if ($form_state['input']['tm_new_database'] == $current_database) { 
+		form_set_error('tm_new_database', t("Test database could not same as the current database."));  
+	}
+}
+
+/**
+ * Submit Handler
+ * @param unknown_type $form
+ * @param unknown_type $form_state
+ */
+function testing_mode_admin_form_submit(&$form, &$form_state) { 
+	
+	//if testing mode started
+	if (!variable_get('tm_testing_mode', FALSE)) { 
+			
+		set_time_limit(60); 
+		if(_tm_copy_file(SETTINGS_FILE, SETTINGS_BACKUP_FILE)) {
+		 
+			$current_database = 'miconnect';
+			$new_database = $form_state['input']['tm_new_database']; 
+			tm_replace_file_text("'$current_database'", "'$new_database'");
+			
+			//copy database 
+			testing_mode_copy_database($current_database, $new_database) ; 
+			
+			variable_set('tm_new_database', $new_database);
+			variable_set('tm_testing_mode', true);
+			
+			drupal_set_message(t("Testing mode started.")); 
+		} 	
+	} else { //it testing mode is stopped
+		//just copy the files , don't do anything with the database. 
+		if (_tm_copy_file(SETTINGS_BACKUP_FILE, SETTINGS_FILE)) {  
+			variable_set('tm_testing_mode', FALSE);
+			drupal_set_message(t("Testing mode successfully stopped."));
+		} 
+	}
+}
+
+
+function testing_model_database_backup($database) { 
+	
+	//drop previous database backup if any
+	$previous_back_up = variable_get('tm_previous_back_up_file'); 
+	if ($previous_back_up) { 
+		db_query("DROP DATABASE IF EXISTS $previous_back_up");
+	} 
+	
+	
+	//new database name 
+	$backup_database = $database."_BACK_UP_".date('y\y\rm\m\t\hd\d\y_H\h\ri\m\i\ns\s\e\c');
+	
+	//first create database
+	db_query("CREATE DATABASE $backup_database");
+	exec("mysqldump -h localhost -u root $database | mysql -h localhost -u root  $backup_database 2>&1");
+	
+	variable_set('tm_previous_back_up_file', $backup_database); 
+	
+}
+/**
+ * 
+ */
+function testing_mode_copy_database($old_database, $new_database) {
+	
+	//create database backup if database already exists only if its the first time and its newer than previus one
+	//as we can enter some other database by mistake.
+	//and also doing back up for all the time is painful
+	$database_exists = true;  
+	if ((!variable_get('tm_new_database') && $database_exists)  || !variable_get('tm_new_database') != $new_database ) { 
+		testing_model_database_backup($new_database);
+		 
+	}
+	
+	//drop database  as we already have a backup
+	db_query("DROP DATABASE IF EXISTS $new_database");
+	
+	//create database if does not exists
+	db_query("CREATE DATABASE $new_database");
+
+	//now copy the data
+	exec("mysqldump -h localhost -u root $old_database | mysql -h localhost -u root  $new_database 2>&1");
+}
+
+/**
+ * Implemenents hook_boot()
+ */
+function testing_mode_boot() {
+	if (file_exists(SETTINGS_BACKUP_FILE)) {
+		//drupal_set_message(t("Please replace '". SETTINGS_FILE ."' content with '". SETTINGS_BACKUP_FILE ."' content."), 'error');
+	}
+}
+
+/**
+ * @param unknown_type $old_text
+ * @param unknown_type $new_text
+ */
+function tm_replace_file_text($old_text, $new_text) {
+	$str = file_get_contents(SETTINGS_FILE);
+	$new_str = str_replace($old_text, $new_text, $str);
+	return file_put_contents(SETTINGS_FILE, $new_str);
+}
+
+
+/**
+ * Helper function
+ * @param unknown_type $file_path
+ */
+function _tm_copy_file($file, $backup_file) {
+	return copy($file, $backup_file);
+}
+
+/**
+ * Helper function
+ * @param $file
+ * @return boolean
+ */
+function _tm_delete_file($backup_file) {
+	if (file_exists( $backup_file )) {
+		unlink( $backup_file );
+		return TRUE;
+	}
+	return FALSE;
+} 	

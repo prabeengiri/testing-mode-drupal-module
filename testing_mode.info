@@ -1,0 +1,4 @@
+name = Testing Mode
+description = It enablese testing mode on the drupal by switching the database.   
+package = Custom
+core = 7.x
