@@ -11,6 +11,6 @@ To run this effeciently ,
 1. you need to have $this->setup = true; on 'setUp' method of Test Class
 
 2. Mysql should exist on the Environment path as it runs the 'mysql' command 
-3. Drupal command is under the plan
+3. Drush command is under the plan
 
 
