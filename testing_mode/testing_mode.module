@@ -1,6 +1,6 @@
 <?php  
 
-define("SETTINGS_FILE", DRUPAL_ROOT."/sites/default/default.settings.php");
+define("SETTINGS_FILE", DRUPAL_ROOT."/sites/default/settings.php");
 define("SETTINGS_BACKUP_FILE", DRUPAL_ROOT."/sites/default/settings.testing_mode.bak");
 
 function testing_mode_menu() { 
@@ -19,6 +19,7 @@ function testing_mode_menu() {
 
 
 function testing_mode_admin_form() { 
+	
 	$form = array(); 
 	
 	$form['tm_new_database'] = array(
@@ -59,39 +60,40 @@ function testing_mode_admin_form_submit(&$form, &$form_state) {
 	//if testing mode started
 	if (!variable_get('tm_testing_mode', FALSE)) { 
 			
-		set_time_limit(60); 
-		if(_tm_copy_file(SETTINGS_FILE, SETTINGS_BACKUP_FILE)) {
-		 
-			$current_database = 'miconnect';
-			$new_database = $form_state['input']['tm_new_database']; 
-			tm_replace_file_text("'$current_database'", "'$new_database'");
-			
-			//copy database 
-			testing_mode_copy_database($current_database, $new_database) ; 
-			
-			variable_set('tm_new_database', $new_database);
-			variable_set('tm_testing_mode', true);
-			
-			drupal_set_message(t("Testing mode started.")); 
-		} 	
+		set_time_limit(60);
+		
+		$current_database = tm_get_org_database();
+		$new_database = $form_state['input']['tm_new_database'];
+		
+		
+		testing_mode_copy_database($current_database, $new_database);
+		
+		tm_copy_file(SETTINGS_FILE, SETTINGS_BACKUP_FILE); 
+		
+		//append new database in settings.php
+		tm_append_file_text($new_database);
+		
+				
+		drupal_set_message(t("Testing mode started.")); 
 	} else { //it testing mode is stopped
 		//just copy the files , don't do anything with the database. 
-		if (_tm_copy_file(SETTINGS_BACKUP_FILE, SETTINGS_FILE)) {  
-			variable_set('tm_testing_mode', FALSE);
+		if (tm_copy_file(SETTINGS_BACKUP_FILE, SETTINGS_FILE)) {  
+			tm_delete_file(SETTINGS_BACKUP_FILE); 
+			
 			drupal_set_message(t("Testing mode successfully stopped."));
 		} 
 	}
+	
+	//clear the cache
+	cache_clear_all();
+	
 }
 
 
-function testing_model_database_backup($database) { 
+function testing_mode_database_backup($database) { 
 	
-	//drop previous database backup if any
-	$previous_back_up = variable_get('tm_previous_back_up_file'); 
-	if ($previous_back_up) { 
-		db_query("DROP DATABASE IF EXISTS $previous_back_up");
-	} 
 	
+	//db_query("DROP DATABASE IF EXISTS $previous_back_up");
 	
 	//new database name 
 	$backup_database = $database."_BACK_UP_".date('y\y\rm\m\t\hd\d\y_H\h\ri\m\i\ns\s\e\c');
@@ -100,20 +102,32 @@ function testing_model_database_backup($database) {
 	db_query("CREATE DATABASE $backup_database");
 	exec("mysqldump -h localhost -u root $database | mysql -h localhost -u root  $backup_database 2>&1");
 	
-	variable_set('tm_previous_back_up_file', $backup_database); 
+}
+
+/**
+ * Returns the originial default database
+ */
+function tm_get_org_database() { 
 	
+	global $databases; 
+	return $databases['default']['default']; 		
 }
 /**
  * 
  */
 function testing_mode_copy_database($old_database, $new_database) {
 	
-	//create database backup if database already exists only if its the first time and its newer than previus one
+	//set variables before database is copied over. 
+	variable_set('tm_new_database', $new_database);
+	variable_set('tm_testing_mode', true);
+	
+	
+	//create database backup if database already exists only if its the first time and its newer than previous one
 	//as we can enter some other database by mistake.
 	//and also doing back up for all the time is painful
 	$database_exists = true;  
 	if ((!variable_get('tm_new_database') && $database_exists)  || !variable_get('tm_new_database') != $new_database ) { 
-		testing_model_database_backup($new_database);
+		testing_mode_database_backup($new_database);
 		 
 	}
 	
@@ -140,10 +154,23 @@ function testing_mode_boot() {
  * @param unknown_type $old_text
  * @param unknown_type $new_text
  */
-function tm_replace_file_text($old_text, $new_text) {
-	$str = file_get_contents(SETTINGS_FILE);
-	$new_str = str_replace($old_text, $new_text, $str);
-	return file_put_contents(SETTINGS_FILE, $new_str);
+function tm_append_file_text($database) {
+	
+	chmod(SETTINGS_FILE, 755);
+	$file = SETTINGS_FILE;
+	$fh = fopen($file, 'a') or die("can't open file");
+	
+	$new_string =  '$databases["default"]["default"] = array(
+	 "database" => "'.$database.'",
+   "username" => "root",
+   "password" => "",
+   "host" => "localhost",
+   "port" => "3306",
+   "driver" => "mysql",
+   "prefix" => "",
+	);'; 
+	fwrite($fh, $new_string);
+	fclose($fh);
 }
 
 
@@ -151,7 +178,8 @@ function tm_replace_file_text($old_text, $new_text) {
  * Helper function
  * @param unknown_type $file_path
  */
-function _tm_copy_file($file, $backup_file) {
+function tm_copy_file($file, $backup_file) {
+	chmod(SETTINGS_FILE, 755);
 	return copy($file, $backup_file);
 }
 
@@ -160,10 +188,11 @@ function _tm_copy_file($file, $backup_file) {
  * @param $file
  * @return boolean
  */
-function _tm_delete_file($backup_file) {
+function tm_delete_file($backup_file) {
 	if (file_exists( $backup_file )) {
 		unlink( $backup_file );
+		variable_set('tm_testing_mode', FALSE);
 		return TRUE;
 	}
 	return FALSE;
-} 	
+}
