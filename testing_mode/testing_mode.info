@@ -1,4 +1,4 @@
 name = Testing Mode
-description = It enablese testing mode on the drupal by switching the database.   
+description = Enables testing / unit-testing mode on Drupal by switching the database by modifying settings.php.
 package = Custom
 core = 7.x
