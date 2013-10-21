@@ -17,21 +17,52 @@ function testing_mode_menu() {
 	);
 }
 
+/**
+ * Custom variable_get as drupal variable_get was giving a problem. 
+ */
+function tm_variable_get($key) {
+  //all the testing mode related database transaction should happen in the original database.
+  db_set_active('drupal_original');
+  $result = db_query("SELECT value from variable where name=:value", array(':value' => $key));
+  $record = $result->fetchObject();
+  
+  return $record ? unserialize($record->value) : FALSE;   
+ 
+}
+
+function tm_variable_set($key, $value) {
+  db_set_active('drupal_original'); 
+  variable_set($key, $value);    
+}
+
 
 function testing_mode_admin_form() { 
-	
-	$form = array(); 
-	
-	$form['tm_new_database'] = array(
-		'#title' => t("New Database"),
-		'#description' => t("New database hostname for testing mode."),
+  
+	$form = array();
+  $testing_mode = tm_variable_get('tm_testing_mode'); 
+  $form['tm_new_database'] = array(
+		'#title' => t("Test Database Name"),
+		'#description' => t("The new copy of existing Drupal database that will be used for testing purpose."),
 		'#type'=> 'textfield',
-		'#default_value' => variable_get('tm_new_database'),
+		'#default_value' => tm_variable_get('tm_new_database'),
+		'#disabled' => $testing_mode, 
 	);
+  
+  
+  //throw the confirm window , if the existing test database can be used
+  if (tm_variable_get('tm_new_database')) {
+    $form['tm_create_new_database'] = array(
+      '#title' => t("Use existing test database without copying the default database."),
+      '#description' => t("If there is no schema changes, then we can use existing test database without requiring copying again."),
+      '#type'=> 'checkbox',
+      '#default_value' =>1,
+      '#disabled' => $testing_mode,
+    );
+  }
 
 	$form['submit'] = array(
 		'#type'=> 'submit',
-		'#value' => variable_get('tm_testing_mode') ? t("Stop Testing Mode") : ("Start Testing Mode"),
+		'#value' => tm_variable_get('tm_testing_mode') ? t("Stop Testing Mode") : ("Start Testing Mode"),
 	);
 	
 	$form['#validate'][] = 'testing_mode_admin_form_validate';
@@ -39,15 +70,24 @@ function testing_mode_admin_form() {
 	return $form;
 	 
 }
-
+ 
 /**
  * Validate callback for the form 
  */
 function testing_mode_admin_form_validate(&$form, &$form_state) { 
-	$current_database = 'miconnect';
-	if ($form_state['input']['tm_new_database'] == $current_database) { 
-		form_set_error('tm_new_database', t("Test database could not same as the current database."));  
-	}
+  //throw error if database exists and not part of the previous test database, to prevent from overriding existing databases 
+  if (!tm_variable_get('tm_testing_mode') && tm_database_exists($form_state['input']['tm_new_database']) && tm_variable_get('tm_new_database') !=$form_state['input']['tm_new_database'] ) {
+    form_set_error('tm_new_database', t("Database already exists. Please use different database name."));
+  }
+}
+
+/**
+ * check if database exists
+ */
+function tm_database_exists($database) {
+  $result = db_query("SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '$database'");
+  $record = $result->fetchObject(); 
+  return !empty($record); 
 }
 
 /**
@@ -55,31 +95,57 @@ function testing_mode_admin_form_validate(&$form, &$form_state) {
  * @param unknown_type $form
  * @param unknown_type $form_state
  */
-function testing_mode_admin_form_submit(&$form, &$form_state) { 
-	
+function testing_mode_admin_form_submit(&$form, &$form_state) {
+     
 	//if testing mode started
-	if (!variable_get('tm_testing_mode', FALSE)) { 
+	if (!tm_variable_get('tm_testing_mode', FALSE)) {
 			
-		set_time_limit(60);
+		set_time_limit(360);
 		
 		$current_database = tm_get_org_database();
 		$new_database = $form_state['input']['tm_new_database'];
-		
-		
-		testing_mode_copy_database($current_database, $new_database);
-		
-		tm_copy_file(SETTINGS_FILE, SETTINGS_BACKUP_FILE); 
-		
-		//append new database in settings.php
-		tm_append_file_text($new_database);
-		
-				
-		drupal_set_message(t("Testing mode started.")); 
+    $status = true;
+    
+    //copy database if 'user existing database is unchecked;
+    if (isset($form_state['input']['tm_create_new_database'])) {
+      //now check if there is existing database or not
+        
+      if (!tm_database_exists(tm_variable_get('tm_new_database'))) {
+        drupal_set_message("There is no existing test database.", 'error');
+        $status = false; 
+      } 
+    } else { //if new database is to be created
+      if (!testing_mode_copy_database($current_database, $new_database)) {
+        $status = false;  
+        drupal_set_message("Problem copying database. Please make sure 'mysqldump' is in the system path and server is restarted", 'error'); 
+      }
+    }
+    
+     //settings.php might already have new database settings for testing mode therefore revert back the settings.php file
+    if (file_exists(SETTINGS_BACKUP_FILE)) {
+      tm_copy_file(SETTINGS_BACKUP_FILE, SETTINGS_FILE); //copy the default to the main settings.php file         
+    }
+     
+    if (!tm_copy_file(SETTINGS_FILE, SETTINGS_BACKUP_FILE)) {
+      drupal_set_message("Problem copying the files. ", 'error'); 
+      $status  = false; 
+    } 
+    //append new database in settings.php
+    if (!tm_append_file_text($new_database, $current_database)) {
+      drupal_set_message("Proble writing in the settings.php"); 
+      $status  = false; 
+    }
+     
+		if ($status) {
+  		tm_variable_set('tm_new_database', $new_database);
+      tm_variable_set('tm_testing_mode', true);
+      drupal_set_message(t("Testing mode started."));
+    }
+      
 	} else { //it testing mode is stopped
 		//just copy the files , don't do anything with the database. 
 		if (tm_copy_file(SETTINGS_BACKUP_FILE, SETTINGS_FILE)) {  
 			tm_delete_file(SETTINGS_BACKUP_FILE); 
-			
 			drupal_set_message(t("Testing mode successfully stopped."));
 		} 
 	}
@@ -88,65 +154,51 @@ function testing_mode_admin_form_submit(&$form, &$form_state) {
 	cache_clear_all();
 	
 }
-
-
-function testing_mode_database_backup($database) { 
-	
-	
-	//db_query("DROP DATABASE IF EXISTS $previous_back_up");
-	
-	//new database name 
-	$backup_database = $database."_BACK_UP_".date('y\y\rm\m\t\hd\d\y_H\h\ri\m\i\ns\s\e\c');
-	
-	//first create database
-	db_query("CREATE DATABASE $backup_database");
-	exec("mysqldump -h localhost -u root $database | mysql -h localhost -u root  $backup_database 2>&1");
-	
-}
-
 /**
  * Returns the originial default database
  */
 function tm_get_org_database() { 
 	
 	global $databases; 
-	return $databases['default']['default']; 		
+	return $databases['default']['default']['database']; 		
 }
 /**
- * 
+ *  Create the new database with data as provided . 
  */
 function testing_mode_copy_database($old_database, $new_database) {
 	
-	//set variables before database is copied over. 
-	variable_set('tm_new_database', $new_database);
-	variable_set('tm_testing_mode', true);
-	
-	
-	//create database backup if database already exists only if its the first time and its newer than previous one
-	//as we can enter some other database by mistake.
-	//and also doing back up for all the time is painful
-	$database_exists = true;  
-	if ((!variable_get('tm_new_database') && $database_exists)  || !variable_get('tm_new_database') != $new_database ) { 
-		testing_mode_database_backup($new_database);
-		 
-	}
-	
-	//drop database  as we already have a backup
+  //if new test database name is different than previous one then delete previous one
+  if ($prev_test_database = tm_variable_get('tm_new_database') && $new_database != tm_variable_get('tm_new_database'))  { 
+    db_query("DROP DATABASE IF EXISTS $prev_test_database");
+  } 
+  
+  
 	db_query("DROP DATABASE IF EXISTS $new_database");
 	
 	//create database if does not exists
-	db_query("CREATE DATABASE $new_database");
+  db_query("CREATE DATABASE $new_database");
 
 	//now copy the data
-	exec("mysqldump -h localhost -u root $old_database | mysql -h localhost -u root  $new_database 2>&1");
+	$output = null; 
+	$return = null; 
+	exec("mysqldump -h localhost -u root $old_database | mysql -h localhost -u root  $new_database 2>&1", $output, $return);
+ 
+  if ($return == 0 ) {
+    return true;
+ } else {
+    db_query("DROP DATABASE IF EXISTS $new_database");
+    return false;
+	} 
+		 
 }
 
 /**
- * Implemenents hook_boot()
+ * Implemenents hook_init()
  */
-function testing_mode_boot() {
-	if (file_exists(SETTINGS_BACKUP_FILE)) {
-		//drupal_set_message(t("Please replace '". SETTINGS_FILE ."' content with '". SETTINGS_BACKUP_FILE ."' content."), 'error');
+function testing_mode_init() {
+	if (tm_variable_get('tm_testing_mode')) {
+	   //drupal_set_message(t("Please replace '". SETTINGS_FILE ."' content with '". SETTINGS_BACKUP_FILE ."' content."), 'error');
+	   drupal_set_message("Site is running under test mode. Changes made won't get reflected in the default mode. Click <a href='". base_path() ."admin/config/development/testing_mode'>here</a> to stop ",'warning'); 
 	}
 }
 
@@ -154,23 +206,34 @@ function testing_mode_boot() {
  * @param unknown_type $old_text
  * @param unknown_type $new_text
  */
-function tm_append_file_text($database) {
+function tm_append_file_text($new_database, $old_database) {
 	
 	chmod(SETTINGS_FILE, 755);
 	$file = SETTINGS_FILE;
 	$fh = fopen($file, 'a') or die("can't open file");
 	
-	$new_string =  '$databases["default"]["default"] = array(
-	 "database" => "'.$database.'",
+	$new_string = PHP_EOL . '$databases["default"]["default"] = array(
+	 "database" => "'.$new_database.'",
    "username" => "root",
    "password" => "",
    "host" => "localhost",
    "port" => "3306",
    "driver" => "mysql",
    "prefix" => "",
-	);'; 
-	fwrite($fh, $new_string);
+	);';
+  
+  $new_string .= PHP_EOL . '$databases["drupal_original"]["default"] = array(
+   "database" => "'.$old_database.'",
+   "username" => "root",
+   "password" => "",
+   "host" => "localhost",
+   "port" => "3306",
+   "driver" => "mysql",
+   "prefix" => "",
+  );'; 
+	$return = fwrite($fh, $new_string);
 	fclose($fh);
+  return (bool)$return; 
 }
 
 
@@ -191,7 +254,7 @@ function tm_copy_file($file, $backup_file) {
 function tm_delete_file($backup_file) {
 	if (file_exists( $backup_file )) {
 		unlink( $backup_file );
-		variable_set('tm_testing_mode', FALSE);
+		tm_variable_set('tm_testing_mode', FALSE);
 		return TRUE;
 	}
 	return FALSE;
