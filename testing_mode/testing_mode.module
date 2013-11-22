@@ -55,7 +55,7 @@ function testing_mode_admin_form() {
       '#title' => t("Use existing test database without copying the default database."),
       '#description' => t("If there is no schema changes, then we can use existing test database without requiring copying again."),
       '#type'=> 'checkbox',
-      '#default_value' =>1,
+      '#default_value' => 0,
       '#disabled' => $testing_mode,
     );
   }
@@ -198,7 +198,7 @@ function testing_mode_copy_database($old_database, $new_database) {
 function testing_mode_init() {
 	if (tm_variable_get('tm_testing_mode')) {
 	   //drupal_set_message(t("Please replace '". SETTINGS_FILE ."' content with '". SETTINGS_BACKUP_FILE ."' content."), 'error');
-	   drupal_set_message("Site is running under test mode. Changes made won't get reflected in the default mode. Click <a href='". base_path() ."admin/config/development/testing_mode'>here</a> to stop ",'warning'); 
+	   //drupal_set_message("Site is running under test mode. Changes made won't get reflected in the default mode. Click <a href='". base_path() ."admin/config/development/testing_mode'>here</a> to stop ",'warning'); 
 	}
 }
 
